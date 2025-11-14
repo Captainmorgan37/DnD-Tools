@@ -780,8 +780,6 @@ def tab_ai_assistant(story: Story):
         st.info("NPC response will appear here once OpenAI integration is active.")
 
     st.markdown("---")
- -------------
-
 def tab_world_state(story: Story):
     st.subheader("🌍 World State — Tags, NPCs, Locations")
     # Simple summaries extracted from nodes
@@ -831,6 +829,77 @@ def tab_io(story: Story):
         st.download_button("⬇️ Download story.json", data=j, file_name="branchweaver_story.json", mime="application/json")
 
         st.markdown("#### Export Markdown")
+        md_simple = export_markdown(story, detailed=False)
+        st.download_button("⬇️ Summary.md", data=md_simple, file_name="story_summary.md")
+        md_d = export_markdown(story, detailed=True)
+        st.download_button("⬇️ Detailed.md", data=md_d, file_name="story_detailed.md")
+
+    with col2:
+        st.markdown("#### Import JSON")
+        up = st.file_uploader("Upload BranchWeaver JSON", type=["json"]) 
+        if up is not None:
+            try:
+                data = up.read().decode("utf-8")
+                st.session_state.story = story_from_json(data)
+                st.success("Imported story.")
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"Failed to import: {e}")
+
+
+# ------------- Tab: Settings -------------
+
+def tab_settings(story: Story):
+    st.subheader("⚙️ Settings")
+    st.caption("Display and defaults.")
+    st.session_state.ui["tone_preset"] = st.selectbox("Default Tone Preset", ["Cosmic Absurd", "Dread", "Heroic", "Whimsical", "Neutral"], index=["Cosmic Absurd", "Dread", "Heroic", "Whimsical", "Neutral"].index(st.session_state.ui["tone_preset"]))
+    st.write("Color Palette (fixed)")
+    st.color_picker("Example Color", COLORS[0], key="dummy_color_picker")
+    st.info("For now, colors are auto-assigned per value (NPC/Location/Emotion). Advanced themes can be added later.")
+
+
+# -------------------------------
+# Main App
+# -------------------------------
+
+def main():
+    ensure_state()
+    story: Story = st.session_state.story
+
+    # Sidebar + Project controls
+    sidebar_project(story)
+
+    tabs = st.tabs([
+        "📘 Overview",
+        "🧩 Branch Editor",
+        "🕸️ Visualizer",
+        "🎬 Playback",
+        "🤖 AI Assistant",
+        "🌍 World State",
+        "📦 Import / Export",
+        "⚙️ Settings",
+    ])
+
+    with tabs[0]:
+        tab_overview(story)
+    with tabs[1]:
+        tab_editor(story)
+    with tabs[2]:
+        tab_visualizer(story)
+    with tabs[3]:
+        tab_playback(story)
+    with tabs[4]:
+        tab_ai_assistant(story)
+    with tabs[5]:
+        tab_world_state(story)(story)
+    with tabs[6]:
+        tab_io(story)
+    with tabs[7]:
+        tab_settings(story)
+
+
+if __name__ == "__main__":
+    main()
         md_simple = export_markdown(story, detailed=False)
         st.download_button("⬇️ Summary.md", data=md_simple, file_name="story_summary.md")
         md_d = export_markdown(story, detailed=True)
