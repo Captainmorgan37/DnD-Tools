@@ -1410,10 +1410,11 @@ def tab_ai(story: Story):
                     "Respond ONLY with a JSON object:\n\n"
                     "{\n"
                     '  "text": "rewritten node text",\n'
-                    '  "gm_notes": "optional updated GM notes (or copy the old ones if mostly unchanged)"\n"
+                    '  "gm_notes": "optional updated GM notes (or copy the old ones if mostly unchanged)"\n'
                     "}\n\n"
                     "Do not include any explanation, only the JSON."
                 )
+
 
                 user_msg = (
                     "Campaign context (for tone only):\n"
