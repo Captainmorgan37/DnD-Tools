@@ -690,30 +690,34 @@ def tab_editor(story: Story):
 
 # ------------- Tab: Visualizer -------------
 def tab_visualizer(story: Story):
-    st.subheader("🕸️ Branch Map")
+    st.subheader("🕸️ Branch Map (Zoomable)")
+
     q = st.session_state.ui["filter_text"].lower().strip()
     show_gm = st.session_state.ui["show_gm"]
     color_by = st.session_state.ui["color_by"]
     shape_by = st.session_state.ui["shape_by"]
 
-    dot = graphviz.Digraph("branchweaver", format="png")
+    # Build Graphviz object (SVG)
+    dot = graphviz.Digraph("branchweaver", format="svg")
     dot.attr(rankdir="LR")
 
-    # Nodes
+    # Build nodes
     for nid, n in story.nodes.items():
         if q and (q not in n.title.lower() and q not in n.text.lower()):
             continue
+
+        # color
+        color_val = None
         if color_by == "npc":
             color_val = n.npc
         elif color_by == "location":
             color_val = n.location
         elif color_by == "emotion":
             color_val = n.emotion
-        else:
-            color_val = ""
         fill = color_for_value(color_val) if color_by != "none" else "#ffffff"
         style = "filled" if color_by != "none" else "solid"
 
+        # shape
         shape = "oval"
         if shape_by == "type":
             shape = "doublecircle" if story.start_node_id == nid else "box"
@@ -732,14 +736,70 @@ def tab_visualizer(story: Story):
             edge_label = (ch.text or "") + gate
             dot.edge(nid, ch.target_id, label=edge_label)
 
-    st.graphviz_chart(dot, width="stretch")
+    # Export SVG text
+    svg = dot.pipe().decode("utf-8")
 
+    # Mini pan+zoom library (inline, no CDN needed)
+    panzoom_js = """
+    <script>
+    const svg = document.getElementById("graph-svg");
+    let panX = 0, panY = 0, scale = 1;
+
+    function redraw() {
+        svg.setAttribute("transform", `translate(${panX}, ${panY}) scale(${scale})`);
+    }
+
+    document.addEventListener("wheel", function(e) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -0.1 : 0.1;
+        scale = Math.min(Math.max(0.1, scale + delta), 5);
+        redraw();
+    }, { passive: false });
+
+    let dragging = false;
+    let lastX = 0, lastY = 0;
+    document.addEventListener("mousedown", function(e) {
+        dragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+    });
+    document.addEventListener("mousemove", function(e) {
+        if (dragging) {
+            panX += (e.clientX - lastX);
+            panY += (e.clientY - lastY);
+            lastX = e.clientX;
+            lastY = e.clientY;
+            redraw();
+        }
+    });
+    document.addEventListener("mouseup", function() {
+        dragging = false;
+    });
+    </script>
+    """
+
+    # Wrap SVG in a container with transform group
+    html = f"""
+    <div style="width: 100%; height: 80vh; border: 1px solid #444; overflow: hidden; position: relative;">
+        <svg width="100%" height="100%" style="background-color: white;">
+            <g id="graph-svg">
+                {svg}
+            </g>
+        </svg>
+    </div>
+    {panzoom_js}
+    """
+
+    st.components.v1.html(html, height=800, scrolling=False)
+
+    # Provide DOT download
     st.download_button(
         label="⬇️ Download DOT",
         data=dot.source,
         file_name="branchweaver_graph.dot",
         mime="text/plain",
     )
+
 
 
 # ------------- Tab: Playback -------------
