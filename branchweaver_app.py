@@ -448,7 +448,7 @@ def sidebar_project(story: Story):
         st.session_state.ui["playback_node_id"] = first_id
         st.session_state.ui["playback_history"] = [first_id] if first_id else []
         st.sidebar.success("Seed loaded.")
-        st.experimental_rerun()
+        st.rerun()
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔎 Graph Filters")
@@ -483,7 +483,7 @@ def tab_overview(story: Story):
         if st.button("➕ Quick Add 'Beat' Node"):
             nid = add_node(story, title="New Beat", text="Describe the beat…")
             st.session_state.ui["selected_node_id"] = nid
-            st.experimental_rerun()
+            st.rerun()
 
     with c2:
         st.markdown("### 🧾 Recently Edited")
@@ -506,7 +506,7 @@ def tab_overview(story: Story):
                     st.caption("GM: " + n.gm_notes)
                 if st.button("Edit This Node", key=f"ov_edit_{n.id}"):
                     st.session_state.ui["selected_node_id"] = n.id
-                    st.experimental_rerun()
+                    st.rerun()
 
 
 # ------------- Tab: Branch Editor -------------
@@ -533,7 +533,7 @@ def tab_editor(story: Story):
             if st.button("➕ New First Node", use_container_width=True):
                 nid = add_node(story, title="New Node", text="")
                 st.session_state.ui["selected_node_id"] = nid
-                st.experimental_rerun()
+                st.rerun()
         else:
             options = [f"{v.title}  ·  {k[:8]}" for k, v in node_items]
             ids = [k for k, _ in node_items]
@@ -552,12 +552,12 @@ def tab_editor(story: Story):
             if st.button("➕ New", use_container_width=True):
                 nid = add_node(story, title="New Node", text="")
                 st.session_state.ui["selected_node_id"] = nid
-                st.experimental_rerun()
+                st.rerun()
         with c2:
             if selected_id and st.button("📄 Duplicate", use_container_width=True):
                 new_id = duplicate_node(story, selected_id)
                 st.session_state.ui["selected_node_id"] = new_id
-                st.experimental_rerun()
+                st.rerun()
         with c3:
             if selected_id and st.button("⭐ Make Start", use_container_width=True):
                 story.start_node_id = selected_id
@@ -565,7 +565,7 @@ def tab_editor(story: Story):
             if selected_id and st.button("🗑️ Delete", use_container_width=True):
                 delete_node(story, selected_id)
                 st.session_state.ui["selected_node_id"] = None
-                st.experimental_rerun()
+                st.rerun()
 
     # -------- RIGHT: Node editor --------
     with right:
@@ -645,13 +645,13 @@ def tab_editor(story: Story):
                 col_rm, col_up, col_dn = st.columns(3)
                 if col_rm.button("Remove", key=f"rm_{selected_id}_{i}"):
                     node.choices.pop(i)
-                    st.experimental_rerun()
+                    st.rerun()
                 if col_up.button("↑ Move", key=f"up_{selected_id}_{i}") and i > 0:
                     node.choices[i - 1], node.choices[i] = (
                         node.choices[i],
                         node.choices[i - 1],
                     )
-                    st.experimental_rerun()
+                    st.rerun()
                 if (
                     col_dn.button("↓ Move", key=f"dn_{selected_id}_{i}")
                     and i < len(node.choices) - 1
@@ -660,7 +660,7 @@ def tab_editor(story: Story):
                         node.choices[i],
                         node.choices[i + 1],
                     )
-                    st.experimental_rerun()
+                    st.rerun()
 
         # --- Add new choice ---
         st.markdown("**Add Choice**")
@@ -682,7 +682,7 @@ def tab_editor(story: Story):
             node.choices.append(
                 Choice(text=new_c_text, target_id=target_id, gate=req)
             )
-            st.experimental_rerun()
+            st.rerun()
 
 
 # ------------- Tab: Visualizer -------------
@@ -765,7 +765,7 @@ def tab_playback(story: Story):
         if st.button("🔁 Restart"):
             st.session_state.ui["playback_node_id"] = start_id
             st.session_state.ui["playback_history"] = [start_id]
-            st.experimental_rerun()
+            st.rerun()
     with coly:
         if st.button("⬅️ Step Back"):
             hist = st.session_state.ui.get("playback_history", [])
@@ -773,7 +773,7 @@ def tab_playback(story: Story):
                 hist.pop()
                 st.session_state.ui["playback_history"] = hist
                 st.session_state.ui["playback_node_id"] = hist[-1]
-                st.experimental_rerun()
+                st.rerun()
 
     # Initialize / validate current node
     curr = st.session_state.ui.get("playback_node_id")
@@ -812,7 +812,7 @@ def tab_playback(story: Story):
                 hist = st.session_state.ui.get("playback_history", [])
                 hist.append(ch.target_id)
                 st.session_state.ui["playback_history"] = hist
-                st.experimental_rerun()
+                st.rerun()
 
     hist_titles = [
         story.nodes[x].title
@@ -995,7 +995,7 @@ def tab_io(story: Story):
                 st.session_state.ui["playback_node_id"] = first_id
                 st.session_state.ui["playback_history"] = [first_id] if first_id else []
                 st.success("Imported story.")
-                st.experimental_rerun()
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to import: {e}")
 
