@@ -21,6 +21,8 @@ from typing import Dict, List, Optional
 import streamlit as st
 import graphviz
 import os
+from openai import OpenAI
+
 
 # -------------------------------
 # Page & Theme
@@ -328,6 +330,169 @@ def export_markdown(story: Story, detailed: bool = False) -> str:
                 lines.append(f"- {c.text}{gate} → `{c.target_id[:8]}`{tag}")
         lines.append("")
     return "\n".join(lines)
+
+# -------------------------------
+# OpenAI helpers (AI integration)
+# -------------------------------
+
+@st.cache_resource
+def get_openai_client() -> Optional[OpenAI]:
+    """
+    Returns a cached OpenAI client if an API key is available in Streamlit secrets.
+    Expects st.secrets["openai"]["api_key"] to be set.
+    """
+    api_key = None
+    try:
+        api_key = st.secrets["openai"]["api_key"]
+    except Exception:
+        pass
+
+    if not api_key:
+        return None
+
+    return OpenAI(api_key=api_key)
+
+
+def build_story_context(story: Story, max_nodes: int = 40) -> str:
+    """
+    Build a compact textual summary of the current story to give the model
+    full-context awareness (NPCs, locations, tags, GM notes, key beats).
+    """
+    lines = []
+    lines.append(f"Story title: {story.title}")
+    if story.description:
+        lines.append(f"Story description: {story.description}")
+
+    # Collect NPCs, locations, tags
+    npcs = sorted({n.npc for n in story.nodes.values() if n.npc})
+    locs = sorted({n.location for n in story.nodes.values() if n.location})
+    tags = sorted({t for n in story.nodes.values() for t in n.tags})
+
+    if npcs:
+        lines.append("NPCs: " + ", ".join(npcs))
+    if locs:
+        lines.append("Locations: " + ", ".join(locs))
+    if tags:
+        lines.append("Tags/themes: " + ", ".join(tags))
+
+    # Summarize up to max_nodes
+    lines.append("")
+    lines.append(f"=== Node summaries (up to {max_nodes}) ===")
+    node_items = list(story.nodes.items())
+
+    # Try to put start node first
+    if story.start_node_id and story.start_node_id in story.nodes:
+        node_items.sort(key=lambda kv: kv[0] != story.start_node_id)
+
+    for i, (nid, n) in enumerate(node_items[:max_nodes]):
+        snippet = (n.text or "").replace("\n", " ")
+        if len(snippet) > 160:
+            snippet = snippet[:157] + "…"
+        lines.append(
+            f"- Node {i+1}: id={nid[:8]}, title='{n.title}', "
+            f"npc='{n.npc}', location='{n.location}', emotion='{n.emotion}', "
+            f"tags={n.tags}, gm_notes='{(n.gm_notes or '')[:80]}', text_snippet='{snippet}'"
+        )
+
+    return "\n".join(lines)
+
+
+def apply_ai_nodes_to_story(story: Story, ai_json: str, attach_parent_id: Optional[str] = None, attach_choice_text: Optional[str] = None) -> List[str]:
+    """
+    Takes AI-generated JSON and inserts nodes into the story.
+
+    Expected JSON format:
+    {
+      "nodes": [
+        {
+          "title": "...",
+          "text": "...",
+          "npc": "...",
+          "location": "...",
+          "emotion": "...",
+          "tags": ["..."],
+          "gm_notes": "...",
+          "choices": [
+            {
+              "text": "...",
+              "gate": "...",
+              "tags": ["..."],
+              "target_title": "Title of another node in this list (optional)"
+            }
+          ]
+        },
+        ...
+      ]
+    }
+
+    Returns list of new node IDs.
+    """
+    data = json.loads(ai_json)
+    nodes_def = data.get("nodes", [])
+    if not isinstance(nodes_def, list) or not nodes_def:
+        raise ValueError("AI JSON must contain a non-empty 'nodes' list")
+
+    title_to_id: Dict[str, str] = {}
+    # First pass: create nodes
+    for nd in nodes_def:
+        title = nd.get("title", "Untitled").strip() or "Untitled"
+        text = nd.get("text", "")
+        npc = nd.get("npc", "")
+        location = nd.get("location", "")
+        emotion = nd.get("emotion", "")
+        tags = nd.get("tags", []) or []
+        gm_notes = nd.get("gm_notes", "")
+
+        nid = add_node(
+            story,
+            title=title,
+            text=text,
+            npc=npc,
+            location=location,
+            emotion=emotion,
+            tags=tags,
+            gm_notes=gm_notes,
+        )
+        title_to_id[title] = nid
+
+    # Second pass: wire internal choices
+    for nd in nodes_def:
+        title = nd.get("title", "").strip()
+        nid = title_to_id.get(title)
+        if not nid:
+            continue
+        node = story.nodes[nid]
+        for ch_def in nd.get("choices", []) or []:
+            c_text = ch_def.get("text", "")
+            gate = ch_def.get("gate", "")
+            c_tags = ch_def.get("tags", []) or []
+            tgt_title = (ch_def.get("target_title") or "").strip()
+            target_id = title_to_id.get(tgt_title, "")
+            node.choices.append(
+                Choice(
+                    text=c_text,
+                    target_id=target_id,
+                    tags=c_tags,
+                    gate=gate,
+                )
+            )
+
+    new_ids = list(title_to_id.values())
+
+    # Optionally attach the first new node to an existing parent as a choice
+    if attach_parent_id and attach_choice_text and new_ids:
+        parent = story.nodes.get(attach_parent_id)
+        if parent:
+            parent.choices.append(
+                Choice(
+                    text=attach_choice_text,
+                    target_id=new_ids[0],
+                    tags=[],
+                    gate="",
+                )
+            )
+
+    return new_ids
 
 
 # -------------------------------
@@ -996,6 +1161,297 @@ def tab_generators(story: Story):
                 )
                 st.success(f"Added node: {setting} Scene ({nid[:8]})")
 
+def tab_ai(story: Story):
+    st.subheader("🧠 AI Story Assistant (BranchWeaver)")
+
+    client = get_openai_client()
+    if client is None:
+        st.warning(
+            "No OpenAI API key found. To enable the AI assistant, set "
+            "`st.secrets['openai']['api_key']` in your Streamlit Cloud settings."
+        )
+        st.stop()
+
+    # Which mode?
+    mode = st.radio(
+        "What would you like the AI to do?",
+        [
+            "Generate a new branching sequence",
+            "Expand the selected node",
+            "Rewrite the selected node",
+        ],
+        key="ai_mode",
+    )
+
+    # Show current selection (if any)
+    sel_id = st.session_state.ui.get("selected_node_id")
+    sel_node = story.nodes.get(sel_id) if sel_id and sel_id in story.nodes else None
+
+    with st.expander("Current selection & story context", expanded=False):
+        if sel_node:
+            st.markdown(f"**Selected node:** `{sel_node.title}` (`{sel_node.id[:8]}`)")
+            st.write(sel_node.text or "_(no text)_")
+            if sel_node.gm_notes:
+                st.caption("GM notes: " + sel_node.gm_notes)
+        else:
+            st.caption("No node selected yet in the Branch Editor. The AI can still generate standalone content.")
+
+        if st.checkbox("Show condensed story context (what the AI will see)", value=False, key="show_ai_context"):
+            ctx = build_story_context(story)
+            st.text_area("Story context sent to the AI (read-only)", value=ctx, height=220)
+
+    # Prompt area depends on mode
+    if mode == "Generate a new branching sequence":
+        st.markdown("### 1) Describe the new sequence you want")
+        prompt = st.text_area(
+            "Describe what should happen (e.g. 'Return to Phandalin after Grol, with Toblen being weird about the haunting, Sister Garaele's odd energy, and hooks to Thundertree and Wave Echo Cave.')",
+            height=140,
+            key="ai_new_branch_prompt",
+        )
+
+        attach_to_existing = st.checkbox(
+            "Attach this new sequence as a choice from the currently selected node (if any)",
+            value=bool(sel_node),
+            disabled=sel_node is None,
+            key="ai_new_branch_attach",
+        )
+        attach_choice_text = ""
+        if attach_to_existing and sel_node:
+            attach_choice_text = st.text_input(
+                "Text of the new choice on the selected node",
+                value="Follow this thread…",
+                key="ai_new_branch_choice_text",
+            )
+
+        if st.button("✨ Generate Branch with AI", key="ai_new_branch_go"):
+            if not prompt.strip():
+                st.error("Please describe the sequence you want.")
+            else:
+                with st.spinner("Talking to the eldritch script goblin…"):
+                    ctx = build_story_context(story)
+                    system_msg = (
+                        "You are BranchWeaver, an assistant for creating branching D&D scenes. "
+                        "You must respond ONLY with JSON in this exact format:\n\n"
+                        "{\n"
+                        '  "nodes": [\n'
+                        "    {\n"
+                        '      "title": "short scene or beat title",\n'
+                        '      "text": "read-aloud style or narrative text",\n'
+                        '      "npc": "main speaking NPC (or empty string)",\n'
+                        '      "location": "where this happens",\n'
+                        '      "emotion": "overall tone or emotion keyword",\n'
+                        '      "tags": ["keyword1", "keyword2"],\n'
+                        '      "gm_notes": "hidden notes for the DM: intentions, secrets, tactics, etc.",\n'
+                        '      "choices": [\n'
+                        "        {\n"
+                        '          "text": "choice the players can make",\n'
+                        '          "gate": "optional requirement like Skill DC or condition (or empty string)",\n'
+                        '          "tags": ["optional", "tags", "for", "this", "choice"],\n'
+                        '          "target_title": "title of another node from this same nodes list that this choice leads to (or empty string if this ends here)"\n'
+                        "        }\n"
+                        "      ]\n"
+                        "    }\n"
+                        "  ]\n"
+                        "}\n\n"
+                        "Do not include any explanation, only the JSON object."
+                    )
+
+                    user_msg = (
+                        "Here is the existing campaign context:\n"
+                        f"{ctx}\n\n"
+                        "Now, based on that campaign, create a new branching sequence as requested.\n\n"
+                        f"Request from DM:\n{prompt}\n\n"
+                        "Remember to keep the tone consistent with the context (cosmic absurdity, streaks of humor, and the established NPC quirks)."
+                    )
+
+                    try:
+                        resp = client.chat.completions.create(
+                            model="gpt-4.1-mini",
+                            messages=[
+                                {"role": "system", "content": system_msg},
+                                {"role": "user", "content": user_msg},
+                            ],
+                        )
+                        raw = resp.choices[0].message.content.strip()
+                        st.session_state["ai_last_raw_json"] = raw
+                        st.success("AI branch generated. Review the JSON below, then apply it to the story.")
+
+                        st.code(raw, language="json")
+
+                        if st.button("✅ Apply these nodes to the story", key="ai_new_branch_apply"):
+                            parent_id = sel_node.id if (attach_to_existing and sel_node) else None
+                            new_ids = apply_ai_nodes_to_story(
+                                story,
+                                raw,
+                                attach_parent_id=parent_id,
+                                attach_choice_text=attach_choice_text if parent_id else None,
+                            )
+                            # Move selection to the first new node
+                            if new_ids:
+                                st.session_state.ui["selected_node_id"] = new_ids[0]
+                            st.success(f"Added {len(new_ids)} new nodes to the story.")
+                    except Exception as e:
+                        st.error(f"OpenAI call failed: {e}")
+
+    elif mode == "Expand the selected node":
+        st.markdown("### 1) Expand the current node")
+        if not sel_node:
+            st.info("Select a node in the Branch Editor first to expand it.")
+            return
+
+        expand_prompt = st.text_area(
+            "What kind of expansion do you want? (e.g. 'Add more eerie tavern details and give 2–3 interesting choices, one toward Thundertree and one toward Wave Echo Cave.')",
+            height=120,
+            key="ai_expand_prompt",
+        )
+
+        if st.button("✨ Propose expansion with AI", key="ai_expand_go"):
+            if not expand_prompt.strip():
+                st.error("Please describe how you'd like to expand this node.")
+            else:
+                with st.spinner("Letting the node grow extra tentacles…"):
+                    ctx = build_story_context(story)
+                    system_msg = (
+                        "You are BranchWeaver, an assistant for expanding D&D story nodes. "
+                        "Respond with JSON describing an updated version of THIS SINGLE NODE only, "
+                        "in the same JSON structure as a single element inside the 'nodes' list:\n\n"
+                        "{\n"
+                        '  "title": "...",\n'
+                        '  "text": "...",\n'
+                        '  "npc": "...",\n'
+                        '  "location": "...",\n'
+                        '  "emotion": "...",\n'
+                        '  "tags": ["..."],\n'
+                        '  "gm_notes": "...",\n'
+                        '  "choices": [\n'
+                        "    {\n"
+                        '      "text": "...",\n'
+                        '      "gate": "...",\n'
+                        '      "tags": ["..."],\n'
+                        '      "target_title": ""  // leave blank to let the DM wire it\n'
+                        "    }\n"
+                        "  ]\n"
+                        "}\n\n"
+                        "Do not wrap this in a 'nodes' array. Return only the JSON object for this node."
+                    )
+
+                    user_msg = (
+                        "Existing campaign context:\n"
+                        f"{ctx}\n\n"
+                        "Node to expand:\n"
+                        f"Title: {sel_node.title}\n"
+                        f"NPC: {sel_node.npc}\n"
+                        f"Location: {sel_node.location}\n"
+                        f"Emotion: {sel_node.emotion}\n"
+                        f"Tags: {sel_node.tags}\n"
+                        f"GM notes: {sel_node.gm_notes}\n"
+                        f"Text:\n{sel_node.text}\n\n"
+                        f"DM expansion request:\n{expand_prompt}\n"
+                    )
+
+                    try:
+                        resp = client.chat.completions.create(
+                            model="gpt-4.1-mini",
+                            messages=[
+                                {"role": "system", "content": system_msg},
+                                {"role": "user", "content": user_msg},
+                            ],
+                        )
+                        raw = resp.choices[0].message.content.strip()
+                        st.session_state["ai_last_expand_json"] = raw
+                        st.success("AI proposed an expanded version of this node. Review below.")
+
+                        st.code(raw, language="json")
+
+                        if st.button("✅ Apply expansion to this node", key="ai_expand_apply"):
+                            try:
+                                nd = json.loads(raw)
+                                sel_node.title = nd.get("title", sel_node.title)
+                                sel_node.text = nd.get("text", sel_node.text)
+                                sel_node.npc = nd.get("npc", sel_node.npc)
+                                sel_node.location = nd.get("location", sel_node.location)
+                                sel_node.emotion = nd.get("emotion", sel_node.emotion)
+                                sel_node.tags = nd.get("tags", sel_node.tags)
+                                sel_node.gm_notes = nd.get("gm_notes", sel_node.gm_notes)
+                                sel_node.choices = []
+                                for ch_def in nd.get("choices", []) or []:
+                                    sel_node.choices.append(
+                                        Choice(
+                                            text=ch_def.get("text", ""),
+                                            target_id="",  # DM can wire later in editor
+                                            tags=ch_def.get("tags", []) or [],
+                                            gate=ch_def.get("gate", ""),
+                                        )
+                                    )
+                                st.success("Node updated with AI expansion.")
+                            except Exception as e:
+                                st.error(f"Failed to apply expansion JSON: {e}")
+                    except Exception as e:
+                        st.error(f"OpenAI call failed: {e}")
+
+    elif mode == "Rewrite the selected node":
+        st.markdown("### 1) Rewrite the current node for tone or clarity")
+        if not sel_node:
+            st.info("Select a node in the Branch Editor first to rewrite it.")
+            return
+
+        rewrite_style = st.text_input(
+            "Describe how to rewrite this node (e.g. 'More ominous, less silly' or 'Lean into Monty Python absurdism')",
+            value="Keep the same content but sharpen the cosmic-dread-meets-absurdity vibe.",
+            key="ai_rewrite_style",
+        )
+
+        if st.button("✨ Suggest rewrite", key="ai_rewrite_go"):
+            with st.spinner("Polishing the monologue…"):
+                ctx = build_story_context(story)
+                system_msg = (
+                    "You are BranchWeaver, an assistant for rewriting D&D story text for a DM. "
+                    "You will be given one node and a rewrite style request. "
+                    "Respond ONLY with a JSON object:\n\n"
+                    "{\n"
+                    '  "text": "rewritten node text",\n'
+                    '  "gm_notes": "optional updated GM notes (or copy the old ones if mostly unchanged)"\n"
+                    "}\n\n"
+                    "Do not include any explanation, only the JSON."
+                )
+
+                user_msg = (
+                    "Campaign context (for tone only):\n"
+                    f"{ctx}\n\n"
+                    "Node to rewrite:\n"
+                    f"Title: {sel_node.title}\n"
+                    f"GM notes: {sel_node.gm_notes}\n"
+                    f"Text:\n{sel_node.text}\n\n"
+                    f"Rewrite request:\n{rewrite_style}\n"
+                )
+
+                try:
+                    resp = client.chat.completions.create(
+                        model="gpt-4.1-mini",
+                        messages=[
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    )
+                    raw = resp.choices[0].message.content.strip()
+                    st.session_state["ai_last_rewrite_json"] = raw
+                    st.success("AI suggested a rewrite. Review below.")
+
+                    st.code(raw, language="json")
+
+                    if st.button("✅ Apply rewrite", key="ai_rewrite_apply"):
+                        try:
+                            nd = json.loads(raw)
+                            sel_node.text = nd.get("text", sel_node.text)
+                            if "gm_notes" in nd:
+                                sel_node.gm_notes = nd.get("gm_notes", sel_node.gm_notes)
+                            st.success("Node text updated.")
+                        except Exception as e:
+                            st.error(f"Failed to apply rewrite JSON: {e}")
+                except Exception as e:
+                    st.error(f"OpenAI call failed: {e}")
+
+
 
 # ------------- Tab: World State -------------
 def tab_world_state(story: Story):
@@ -1137,18 +1593,18 @@ def main():
 
     sidebar_project(story)
 
-    tabs = st.tabs(
-        [
-            "📘 Overview",
-            "🧩 Branch Editor",
-            "🕸️ Visualizer",
-            "🎬 Playback",
-            "🧪 Generators",
-            "🌍 World State",
-            "📦 Import / Export",
-            "⚙️ Settings",
-        ]
-    )
+    tabs = st.tabs([
+        "📘 Overview",
+        "🧩 Branch Editor",
+        "🕸️ Visualizer",
+        "🎬 Playback",
+        "🧪 Generators",
+        "🧠 AI Assistant",
+        "🌍 World State",
+        "📦 Import / Export",
+        "⚙️ Settings",
+    ])
+
 
     with tabs[0]:
         tab_overview(story)
@@ -1161,11 +1617,14 @@ def main():
     with tabs[4]:
         tab_generators(story)
     with tabs[5]:
-        tab_world_state(story)
+        tab_ai(story)          # 👈 NEW
     with tabs[6]:
-        tab_io(story)
+        tab_world_state(story)
     with tabs[7]:
+        tab_io(story)
+    with tabs[8]:
         tab_settings(story)
+
 
     # Auto-save story on each run
     autosave(story)
