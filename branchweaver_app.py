@@ -628,10 +628,16 @@ def tab_playback(story: Story):
     # Pick a starting node
     ids = list(story.nodes.keys())
     labels = [f"{story.nodes[i].title} · {i[:8]}" for i in ids]
+    # Pick a starting node safely
     start_idx = 0
     if story.start_node_id in ids:
         start_idx = ids.index(story.start_node_id)
+    else:
+        # Auto-fix broken start_node_id
+        story.start_node_id = ids[0]
+    
     start_label = st.selectbox("Start at", labels, index=start_idx)
+
     start_id = ids[labels.index(start_label)]
 
     # Reset controls
