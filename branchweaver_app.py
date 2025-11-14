@@ -677,11 +677,27 @@ Generate the following structured output:
     # Pick a starting node
     ids = list(story.nodes.keys())
     labels = [f"{story.nodes[i].title} · {i[:8]}" for i in ids]
-    start_idx = 0
-    if story.start_node_id in ids:
-        start_idx = ids.index(story.start_node_id)
+    
+    if not ids:
+        st.warning("No nodes available for playback.")
+        return
+    
+    # Ensure the start node is valid
+    if story.start_node_id not in ids:
+        story.start_node_id = ids[0]
+    
+    start_idx = ids.index(story.start_node_id)
+    
+    # Render selector safely
     start_label = st.selectbox("Start at", labels, index=start_idx)
-    start_id = ids[labels.index(start_label)]
+    
+    # Convert label → id safely (never crash)
+    try:
+        start_id = ids[labels.index(start_label)]
+    except ValueError:
+        # fallback (should never happen but prevents crashes)
+        start_id = ids[start_idx]
+
 
     # Reset controls
     colx, coly = st.columns([1,1])
