@@ -92,6 +92,29 @@ def ensure_state():
         }
 
 
+import os
+
+def try_autoload():
+    if os.path.exists("story_autosave.json"):
+        try:
+            with open("story_autosave.json", "r", encoding="utf-8") as f:
+                data = f.read()
+            st.session_state.story = story_from_json(data)
+            return True
+        except:
+            return False
+    return False
+
+
+def autosave(story: Story):
+    try:
+        with open("story_autosave.json", "w", encoding="utf-8") as f:
+            f.write(story_to_json(story))
+    except:
+        pass
+
+
+
 def node_to_label(n: Node, show_gm: bool = False) -> str:
     """HTML-like label for Graphviz."""
     title = n.title or "(untitled)"
@@ -804,6 +827,16 @@ def main():
     ensure_state()
     story: Story = st.session_state.story
 
+    # -------------------------------
+    # Auto-load saved story if available
+    # -------------------------------
+    if "loaded_autosave" not in st.session_state:
+        if try_autoload():
+            st.session_state.loaded_autosave = True
+        else:
+            st.session_state.loaded_autosave = False
+
+
     # Sidebar + Project controls
     sidebar_project(story)
 
@@ -834,6 +867,12 @@ def main():
         tab_io(story)
     with tabs[7]:
         tab_settings(story)
+
+    # -------------------------------
+    # Auto-save after each run
+    # -------------------------------
+    autosave(st.session_state.story)
+
 
 
 if __name__ == "__main__":
