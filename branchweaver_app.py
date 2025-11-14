@@ -729,7 +729,7 @@ def tab_visualizer(story: Story):
             edge_label = (ch.text or "") + gate
             dot.edge(nid, ch.target_id, label=edge_label)
 
-    st.graphviz_chart(dot, use_container_width=True)
+    st.graphviz_chart(dot, width="stretch")
 
     st.download_button(
         label="⬇️ Download DOT",
@@ -984,20 +984,27 @@ def tab_io(story: Story):
     with col2:
         st.markdown("#### Import JSON")
         up = st.file_uploader("Upload BranchWeaver JSON", type=["json"])
-        if up is not None:
+        if "just_imported" not in st.session_state:
+            st.session_state.just_imported = False
+        
+        if up is not None and not st.session_state.just_imported:
             try:
                 data = up.read().decode("utf-8")
                 st.session_state.story = story_from_json(data)
-                # Reset UI selection/playback to new story
                 story = st.session_state.story
+        
+                # Reset UI selection/playback to new story
                 first_id = next(iter(story.nodes.keys()), None)
                 st.session_state.ui["selected_node_id"] = first_id
                 st.session_state.ui["playback_node_id"] = first_id
                 st.session_state.ui["playback_history"] = [first_id] if first_id else []
+        
+                st.session_state.just_imported = True
                 st.success("Imported story.")
-                st.rerun()
+                # ❌ No st.rerun() needed — Streamlit will naturally rerun
             except Exception as e:
                 st.error(f"Failed to import: {e}")
+
 
 
 # ------------- Tab: Settings -------------
