@@ -15,7 +15,7 @@
 from __future__ import annotations
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict, is_dataclass
 from typing import Dict, List, Optional
 
 import streamlit as st
@@ -228,6 +228,8 @@ def story_to_json(story: Story) -> str:
     """Safe JSON encoder for Story/Node/Choice."""
 
     def _encode(obj):
+        if is_dataclass(obj):
+            return _encode(asdict(obj))
         if isinstance(obj, Story):
             return {
                 "title": obj.title,
