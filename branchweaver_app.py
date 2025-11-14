@@ -989,7 +989,7 @@ def tab_io(story: Story):
         
         if up is not None and not st.session_state.just_imported:
             try:
-                data = up.read().decode("utf-8")
+                data = up.getvalue().decode("utf-8")
                 st.session_state.story = story_from_json(data)
                 story = st.session_state.story
         
