@@ -1640,10 +1640,11 @@ def tab_io(story: Story):
         j = story_to_json(story)
         st.download_button(
             "⬇️ Download story.json",
-            data=j,
+            data=story_to_json(story),
             file_name="branchweaver_story.json",
             mime="application/json",
         )
+
 
         st.markdown("#### Export Markdown")
         md_simple = export_markdown(story, detailed=False)
