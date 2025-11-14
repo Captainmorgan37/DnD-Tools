@@ -995,10 +995,10 @@ def tab_playback(story: Story):
         st.info("No nodes in the story yet. Add some in the Branch Editor.")
         return
 
+    # --- Choose starting node safely ---
     ids = list(story.nodes.keys())
     labels = [f"{story.nodes[i].title} · {i[:8]}" for i in ids]
 
-    # Choose start node safely
     if story.start_node_id in ids:
         start_idx = ids.index(story.start_node_id)
     else:
@@ -1023,7 +1023,7 @@ def tab_playback(story: Story):
                 st.session_state.ui["playback_node_id"] = hist[-1]
                 st.rerun()
 
-    # Initialize / validate current node
+    # --- Initialize / validate current node ---
     curr = st.session_state.ui.get("playback_node_id")
     if not curr or curr not in story.nodes:
         curr = start_id
@@ -1036,6 +1036,137 @@ def tab_playback(story: Story):
         return
 
     n = story.nodes[current_id]
+
+    # ===============================
+    # 🧠 Live DM Assist (text-only)
+    # ===============================
+    with st.expander("🧠 Live DM Assist (AI — suggest NPC reply & branches)", expanded=False):
+        client = get_openai_client()
+        if client is None:
+            st.info(
+                "Add an OpenAI API key in `st.secrets['openai']['api_key']` to enable the DM Assist, "
+                "or use the 🧠 AI Assistant tab for offline tools."
+            )
+        else:
+            st.caption(
+                "Describe what the **players just said**. The AI will respond as the current NPC, "
+                "using this scene, GM notes, and your story history."
+            )
+            player_input = st.text_area(
+                "What did the players say?",
+                key=f"dmassist_player_input_{current_id}",
+                height=80,
+                placeholder="e.g., 'We tell Toblen we slept like babies and ask again about the \"haunting\".'",
+            )
+
+            if st.button("🎭 Generate NPC response", key=f"dmassist_btn_{current_id}"):
+                # Build playback history titles
+                playback_hist = st.session_state.ui.get("playback_history", [])
+                hist_titles = [
+                    story.nodes[nid].title
+                    for nid in playback_hist
+                    if nid in story.nodes
+                ]
+
+                # Full story context for tone/continuity
+                ctx = build_story_context(story)
+
+                system_msg = (
+                    "You are BranchWeaver DM Assist, a helper for a D&D DM.\n"
+                    "Your job is to generate in-character NPC responses and DM guidance.\n\n"
+                    "Tone: 'Lovecraft through a Monty Python lens' — cosmic dread with streaks of absurd humor.\n"
+                    "Always keep it usable at the table: short-ish NPC speech, clear cues for the DM, and "
+                    "optional ideas for branching outcomes.\n"
+                    "Respond in plain Markdown with these sections:\n\n"
+                    "### NPC Response\n"
+                    "- What the NPC actually says, as dialogue.\n\n"
+                    "### Scene Shift\n"
+                    "- How the environment / other NPCs react.\n\n"
+                    "### DM Options\n"
+                    "- 2–4 bullet points of ways the scene could branch.\n"
+                )
+
+                user_msg = (
+                    "=== CURRENT NODE ===\n"
+                    f"Title: {n.title}\n"
+                    f"NPC: {n.npc}\n"
+                    f"Location: {n.location}\n"
+                    f"Emotion: {n.emotion}\n"
+                    f"Tags: {n.tags}\n"
+                    f"GM Notes: {n.gm_notes}\n"
+                    f"Text:\n{n.text}\n\n"
+                    "=== PLAYBACK HISTORY (titles in order) ===\n"
+                    + " -> ".join(hist_titles) + "\n\n"
+                    "=== PLAYER INPUT ===\n"
+                    f"{player_input}\n\n"
+                    "=== BROADER STORY CONTEXT ===\n"
+                    f"{ctx}\n\n"
+                    "Now, staying consistent with all of this, generate the sections requested."
+                )
+
+                try:
+                    resp = client.chat.completions.create(
+                        model="gpt-4.1-mini",
+                        messages=[
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    )
+                    reply = resp.choices[0].message.content.strip()
+
+                    # Store per-node so navigating doesn't mix responses
+                    st.session_state["dmassist_last_reply"] = reply
+                    st.session_state["dmassist_last_node_id"] = current_id
+                    st.success("NPC response generated.")
+                except Exception as e:
+                    st.error(f"AI generation failed: {e}")
+
+            # Show last reply, if for this node
+            last_reply = st.session_state.get("dmassist_last_reply")
+            last_node = st.session_state.get("dmassist_last_node_id")
+            if last_reply and last_node == current_id:
+                st.markdown("#### 📜 Suggested Response & Branch Ideas")
+                st.markdown(last_reply)
+
+                st.markdown("---")
+                st.markdown("#### ➕ Turn this into a new node")
+                default_choice = "Follow this conversation"
+                choice_text = st.text_input(
+                    "Choice text on this node to reach the new one:",
+                    value=default_choice,
+                    key=f"dmassist_choice_text_{current_id}",
+                )
+                if st.button(
+                    "➕ Create node from reply & add choice",
+                    key=f"dmassist_make_node_{current_id}",
+                ):
+                    new_id = add_node(
+                        story,
+                        title=f"{n.npc or 'NPC'} reply",
+                        text=last_reply,
+                        npc=n.npc,
+                        location=n.location,
+                        emotion=n.emotion,
+                        tags=list(n.tags),
+                        gm_notes="Generated via Live DM Assist from table dialogue.",
+                    )
+                    # Wire choice from current node to new node
+                    n.choices.append(
+                        Choice(
+                            text=choice_text or default_choice,
+                            target_id=new_id,
+                            tags=["ai_generated"],
+                            gate="",
+                        )
+                    )
+                    st.session_state.ui["selected_node_id"] = new_id
+                    st.success(f"Created new node ({new_id[:8]}) and linked it as a choice.")
+                    st.rerun()
+
+    # ===============================
+    # Normal playback display
+    # ===============================
+    st.markdown("---")
     st.markdown(f"### {n.title}")
     if n.npc or n.location or n.emotion:
         meta = " • ".join([x for x in [n.npc, n.location, n.emotion] if x])
@@ -1045,7 +1176,6 @@ def tab_playback(story: Story):
         show_gm = st.checkbox("Show GM notes", key="pb_show_gm")
         if show_gm:
             st.info(n.gm_notes)
-
 
     st.markdown("---")
     if not n.choices:
@@ -1071,6 +1201,7 @@ def tab_playback(story: Story):
         if x in story.nodes
     ]
     st.caption("History: " + " → ".join(hist_titles))
+
 
 
 # ------------- Tab: Generators -------------
