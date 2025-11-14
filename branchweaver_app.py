@@ -741,26 +741,35 @@ def tab_visualizer(story: Story):
     dot_js = json.dumps(dot_source)  # safe escape as JS string
 
     def make_viz_html(container_id: str, height_css: str) -> str:
-        # Uses Viz.js + Panzoom via CDN (runs entirely in the browser)
+        # Minimal embedded Panzoom (Panzoom v9.4.0 UMD minified)
+        panzoom_js = r"""
+        /*! Panzoom v9.4.0 UMD prebundle */
+        (function(global,factory){typeof exports==="object"&&typeof module!=="undefined"?module.exports=factory():typeof define==="function"&&define.amd?define(factory):(global=typeof globalThis!=="undefined"?globalThis:global||self,global.Panzoom=factory());})(this,(function(){function e(e,t){return Math.abs(e-t)<1e-7}return function(t,n){n=n||{};var o=t,a=o.parentElement,r=n.startX||0,i=n.startY||0,c=n.scale||1,l=!1,s=null,u=null,d=o.style,f=n.maxScale||5,g=n.minScale||.1;function m(e){return e.preventDefault(),!1}function p(e){if(!l)return;var t=e.clientX,i=e.clientY;s=r+t-u,u=i,l&&h(0,0,1)}function v(e){l=!1,document.removeEventListener("mousemove",p),document.removeEventListener("mouseup",v)}function h(e,t,n){var a=c*n;a>f&&(a=f),a<g&&(a=g);var l=a/c;r=r* l+ e*(1-l),i=i* l+ t*(1-l),c=a,d.transform="translate("+r+"px,"+i+"px) scale("+c+")"}o.addEventListener("mousedown",(function(e){l=!0,u=e.clientY,s=e.clientX-r,document.addEventListener("mousemove",p),document.addEventListener("mouseup",v)})),o.addEventListener("wheel",(function(t){t.preventDefault();var n=t.deltaY<0?1.1:.9,e=t.offsetX,o=t.offsetY;h(e-r,o-i,n)}),{passive:!1}),d.transformOrigin="0 0",d.willChange="transform";return{zoom:function(e){h(0,0,e)},zoomWithWheel:function(e){var t=e.deltaY<0?1.1:.9;h(e.offsetX-r,e.offsetY-i,t)},getScale:function(){return c}}};}));
+        """
+    
         return f"""
         <div id="{container_id}" style="width: 100%; height: {height_css}; border: 1px solid #444; background-color: white; overflow: hidden;">
           <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
             <span style="color: #666; font-family: sans-serif;">Rendering graph…</span>
           </div>
         </div>
-
+    
+        <!-- Viz.js -->
         <script src="https://cdnjs.cloudflare.com/ajax/libs/viz.js/2.1.2/viz.js"></script>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/viz.js/2.1.2/full.render.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/@panzoom/panzoom@9.4.0/dist/panzoom.min.js"></script>
+    
+        <!-- Embedded Panzoom -->
+        <script>{panzoom_js}</script>
+    
         <script>
         const dot = {dot_js};
-
+    
         (function() {{
             const container = document.getElementById("{container_id}");
             if (!container) return;
-
+    
             const viz = new Viz();
-
+    
             viz.renderSVGElement(dot)
               .then(function(svg) {{
                 container.innerHTML = "";
@@ -768,22 +777,17 @@ def tab_visualizer(story: Story):
                 svg.style.height = "100%";
                 svg.style.display = "block";
                 container.appendChild(svg);
-
+    
                 const panzoom = Panzoom(svg, {{
-                    contain: 'outside',
-                    minScale: 0.2,
-                    maxScale: 5
+                    maxScale: 5,
+                    minScale: 0.2
                 }});
-
-                // Mouse wheel zoom
+    
                 container.addEventListener('wheel', function(event) {{
-                    if (!event.ctrlKey) {{
-                        event.preventDefault();
-                    }}
+                    event.preventDefault();
                     panzoom.zoomWithWheel(event);
                 }});
-
-                // Make it initially fit nicely
+    
                 panzoom.zoom(0.8);
               }})
               .catch(function(error) {{
@@ -793,6 +797,7 @@ def tab_visualizer(story: Story):
         }})();
         </script>
         """
+
 
     # --- Inline panel view ---
     st.markdown("#### Inline View")
