@@ -984,16 +984,20 @@ def tab_io(story: Story):
     with col2:
         st.markdown("#### Import JSON")
         up = st.file_uploader("Upload BranchWeaver JSON", type=["json"])
+        # Reset the import flag if a new file is uploaded
+        if up is not None and st.session_state.get("just_imported", False):
+            st.session_state.just_imported = False
+        
         if "just_imported" not in st.session_state:
             st.session_state.just_imported = False
         
         if up is not None and not st.session_state.just_imported:
             try:
-                data = up.getvalue().decode("utf-8")
+                data = up.getvalue().decode("utf-8")   # <-- critical fix
                 st.session_state.story = story_from_json(data)
                 story = st.session_state.story
         
-                # Reset UI selection/playback to new story
+                # Reset selection and playback
                 first_id = next(iter(story.nodes.keys()), None)
                 st.session_state.ui["selected_node_id"] = first_id
                 st.session_state.ui["playback_node_id"] = first_id
@@ -1001,9 +1005,10 @@ def tab_io(story: Story):
         
                 st.session_state.just_imported = True
                 st.success("Imported story.")
-                # ❌ No st.rerun() needed — Streamlit will naturally rerun
+        
             except Exception as e:
                 st.error(f"Failed to import: {e}")
+
 
 
 
