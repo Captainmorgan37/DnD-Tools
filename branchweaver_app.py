@@ -367,16 +367,29 @@ def load_seed(story: Story, seed=SEED_STORY):
             gm_notes=entry.get("gm_notes", ""),
         )
         id_map[entry["title"]] = nid
-    # Wire choices
+    # Wire choices (safe, strict Choice construction)
     for entry in seed.get("nodes", []):
         src_id = id_map.get(entry.get("title", ""))
+        if not src_id:
+            continue
+    
         for ch in entry.get("choices", []):
             tgt_title = ch.get("target", "")
             tgt_id = id_map.get(tgt_title, "")
-            if src_id and tgt_id:
-                story.nodes[src_id].choices.append(
-                    Choice(text=ch.get("text", ""), target_id=tgt_id, gate=ch.get("gate", ""))
+    
+            if not tgt_id:
+                # Skip malformed or unmatched targets
+                continue
+    
+            story.nodes[src_id].choices.append(
+                Choice(
+                    text=ch.get("text", ""),
+                    target_id=tgt_id,
+                    tags=list(ch.get("tags", [])),
+                    gate=ch.get("gate", "")
                 )
+            )
+
     story.title = title
     story.description = description
 
