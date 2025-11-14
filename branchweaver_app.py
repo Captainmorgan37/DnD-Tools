@@ -689,19 +689,20 @@ def tab_editor(story: Story):
 
 
 # ------------- Tab: Visualizer -------------
+
 def tab_visualizer(story: Story):
-    st.subheader("🕸️ Branch Map (Zoomable)")
+    st.subheader("🕸️ Branch Map")
 
     q = st.session_state.ui["filter_text"].lower().strip()
     show_gm = st.session_state.ui["show_gm"]
     color_by = st.session_state.ui["color_by"]
     shape_by = st.session_state.ui["shape_by"]
 
-    # Build Graphviz object (SVG)
-    dot = graphviz.Digraph("branchweaver", format="svg")
+    # Build DOT graph (no call to dot.pipe / no system graphviz needed)
+    dot = graphviz.Digraph("branchweaver")
     dot.attr(rankdir="LR")
 
-    # Build nodes
+    # Nodes
     for nid, n in story.nodes.items():
         if q and (q not in n.title.lower() and q not in n.text.lower()):
             continue
@@ -736,69 +737,83 @@ def tab_visualizer(story: Story):
             edge_label = (ch.text or "") + gate
             dot.edge(nid, ch.target_id, label=edge_label)
 
-    # Export SVG text
-    svg = dot.pipe().decode("utf-8")
+    dot_source = dot.source
+    dot_js = json.dumps(dot_source)  # safe escape as JS string
 
-    # Mini pan+zoom library (inline, no CDN needed)
-    panzoom_js = """
-    <script>
-    const svg = document.getElementById("graph-svg");
-    let panX = 0, panY = 0, scale = 1;
+    def make_viz_html(container_id: str, height_css: str) -> str:
+        # Uses Viz.js + Panzoom via CDN (runs entirely in the browser)
+        return f"""
+        <div id="{container_id}" style="width: 100%; height: {height_css}; border: 1px solid #444; background-color: white; overflow: hidden;">
+          <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+            <span style="color: #666; font-family: sans-serif;">Rendering graph…</span>
+          </div>
+        </div>
 
-    function redraw() {
-        svg.setAttribute("transform", `translate(${panX}, ${panY}) scale(${scale})`);
-    }
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/viz.js/2.1.2/viz.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/viz.js/2.1.2/full.render.js"></script>
+        <script src="https://unpkg.com/@panzoom/panzoom@9.4.0/dist/panzoom.min.js"></script>
+        <script>
+        const dot = {dot_js};
 
-    document.addEventListener("wheel", function(e) {
-        e.preventDefault();
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        scale = Math.min(Math.max(0.1, scale + delta), 5);
-        redraw();
-    }, { passive: false });
+        (function() {{
+            const container = document.getElementById("{container_id}");
+            if (!container) return;
 
-    let dragging = false;
-    let lastX = 0, lastY = 0;
-    document.addEventListener("mousedown", function(e) {
-        dragging = true;
-        lastX = e.clientX;
-        lastY = e.clientY;
-    });
-    document.addEventListener("mousemove", function(e) {
-        if (dragging) {
-            panX += (e.clientX - lastX);
-            panY += (e.clientY - lastY);
-            lastX = e.clientX;
-            lastY = e.clientY;
-            redraw();
-        }
-    });
-    document.addEventListener("mouseup", function() {
-        dragging = false;
-    });
-    </script>
-    """
+            const viz = new Viz();
 
-    # Wrap SVG in a container with transform group
-    html = f"""
-    <div style="width: 100%; height: 80vh; border: 1px solid #444; overflow: hidden; position: relative;">
-        <svg width="100%" height="100%" style="background-color: white;">
-            <g id="graph-svg">
-                {svg}
-            </g>
-        </svg>
-    </div>
-    {panzoom_js}
-    """
+            viz.renderSVGElement(dot)
+              .then(function(svg) {{
+                container.innerHTML = "";
+                svg.style.width = "100%";
+                svg.style.height = "100%";
+                svg.style.display = "block";
+                container.appendChild(svg);
 
-    st.components.v1.html(html, height=800, scrolling=False)
+                const panzoom = Panzoom(svg, {{
+                    contain: 'outside',
+                    minScale: 0.2,
+                    maxScale: 5
+                }});
 
-    # Provide DOT download
+                // Mouse wheel zoom
+                container.addEventListener('wheel', function(event) {{
+                    if (!event.ctrlKey) {{
+                        event.preventDefault();
+                    }}
+                    panzoom.zoomWithWheel(event);
+                }});
+
+                // Make it initially fit nicely
+                panzoom.zoom(0.8);
+              }})
+              .catch(function(error) {{
+                console.error(error);
+                container.innerHTML = "<pre style='color:red; white-space: pre-wrap;'>" + error + "</pre>";
+              }});
+        }})();
+        </script>
+        """
+
+    # --- Inline panel view ---
+    st.markdown("#### Inline View")
+    inline_html = make_viz_html("branchweaver_inline", "70vh")
+    st.components.v1.html(inline_html, height=650, scrolling=False)
+
+    # --- Optional 'fullscreen' style view ---
+    show_full = st.checkbox("Show full-screen map", key="show_full_viz")
+    if show_full:
+        st.markdown("#### Full-Screen Map")
+        full_html = make_viz_html("branchweaver_full", "90vh")
+        st.components.v1.html(full_html, height=900, scrolling=False)
+
+    # DOT download as before
     st.download_button(
         label="⬇️ Download DOT",
-        data=dot.source,
+        data=dot_source,
         file_name="branchweaver_graph.dot",
         mime="text/plain",
     )
+
 
 
 
