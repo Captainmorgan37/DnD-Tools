@@ -199,14 +199,22 @@ def duplicate_node(story: Story, node_id: str) -> str:
 
 
 def story_to_json(story: Story) -> str:
+    """
+    Safe JSON encoder that handles all expected BranchWeaver objects.
+    Prevents Unsupported type errors by gracefully converting anything unexpected.
+    """
+
     def _encode(obj):
+        # Story
         if isinstance(obj, Story):
             return {
                 "title": obj.title,
                 "description": obj.description,
                 "start_node_id": obj.start_node_id,
-                "nodes": {k: _encode(v) for k, v in obj.nodes.items()},
+                "nodes": {nid: _encode(node) for nid, node in obj.nodes.items()},
             }
+
+        # Node
         if isinstance(obj, Node):
             return {
                 "id": obj.id,
@@ -219,6 +227,8 @@ def story_to_json(story: Story) -> str:
                 "gm_notes": obj.gm_notes,
                 "choices": [_encode(c) for c in obj.choices],
             }
+
+        # Choice
         if isinstance(obj, Choice):
             return {
                 "text": obj.text,
@@ -226,9 +236,24 @@ def story_to_json(story: Story) -> str:
                 "tags": obj.tags,
                 "gate": obj.gate,
             }
-        raise TypeError("Unsupported type")
+
+        # Basic types
+        if isinstance(obj, (str, int, float, bool)) or obj is None:
+            return obj
+
+        # List
+        if isinstance(obj, list):
+            return [_encode(x) for x in obj]
+
+        # Dict
+        if isinstance(obj, dict):
+            return {k: _encode(v) for k, v in obj.items()}
+
+        # Fallback — convert to string instead of erroring
+        return str(obj)
 
     return json.dumps(_encode(story), indent=2)
+
 
 
 def story_from_json(s: str) -> Story:
