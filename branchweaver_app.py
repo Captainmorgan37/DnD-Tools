@@ -95,6 +95,9 @@ def ensure_state():
             "tone_preset": "Cosmic Absurd",
         }
 
+    # 🔥 Add this NEW block:
+    if "has_imported" not in st.session_state:
+        st.session_state.has_imported = False
 
 def try_autoload() -> bool:
     """Try to restore story from autosave on disk."""
