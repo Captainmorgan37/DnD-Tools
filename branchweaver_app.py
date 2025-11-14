@@ -622,6 +622,16 @@ def tab_visualizer(story: Story):
 
 # ------------- Tab: Playback -------------
 
+if not story.nodes:
+    st.info("No nodes in the story yet. Add some in the Branch Editor.")
+    return
+
+ids = list(story.nodes.keys())
+if not ids:
+    st.warning("No nodes available for playback.")
+    return
+
+
 def tab_playback(story: Story):
     st.subheader("🎬 Playback — Rehearse a Path")
 
@@ -655,9 +665,12 @@ def tab_playback(story: Story):
                 st.session_state.ui["playback_history"] = hist
 
     # Initialize
-    if not st.session_state.ui["playback_node_id"]:
+    # Ensure current playback node is valid
+    curr = st.session_state.ui.get("playback_node_id")
+    if curr not in ids:
         st.session_state.ui["playback_node_id"] = start_id
         st.session_state.ui["playback_history"] = [start_id]
+
 
     current_id = st.session_state.ui["playback_node_id"]
     if current_id not in story.nodes:
