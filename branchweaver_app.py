@@ -15,7 +15,7 @@
 from __future__ import annotations
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict, is_dataclass
 from typing import Dict, List, Optional
 
 import streamlit as st
@@ -228,6 +228,8 @@ def story_to_json(story: Story) -> str:
     """Safe JSON encoder for Story/Node/Choice."""
 
     def _encode(obj):
+        if is_dataclass(obj):
+            return _encode(asdict(obj))
         if isinstance(obj, Story):
             return {
                 "title": obj.title,
@@ -263,7 +265,15 @@ def story_to_json(story: Story) -> str:
         # Fallback: stringify anything weird instead of crashing
         return str(obj)
 
-    return json.dumps(_encode(story), indent=2)
+    # ensure_ascii=False preserves any non-ASCII characters and the indent
+    # keeps the file human-readable (and proper JSON instead of a quoted blob)
+    return json.dumps(_encode(story), indent=2, ensure_ascii=False)
+
+
+def story_to_json_bytes(story: Story) -> bytes:
+    """Convenience helper to provide UTF-8 encoded JSON for downloads."""
+
+    return story_to_json(story).encode("utf-8")
 
 
 def story_from_json(s: str) -> Story:
@@ -1642,13 +1652,14 @@ def tab_io(story: Story):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("#### Export JSON")
-        j = story_to_json(story)
+        json_bytes = story_to_json_bytes(story)
         st.download_button(
             "⬇️ Download story.json",
-            data=story_to_json(story),
+            data=json_bytes,
             file_name="branchweaver_story.json",
             mime="application/json",
         )
+        st.caption("(The download is UTF-8 JSON—safe to re-import later.)")
 
 
         st.markdown("#### Export Markdown")
