@@ -71,6 +71,11 @@ class Story:
 # -------------------------------
 AUTOSAVE_PATH = "branchweaver_autosave.json"
 
+if "story" in st.session_state:
+    if isinstance(st.session_state.story, str):
+        # Old invalid save format — clear it
+        st.session_state.story = None
+
 
 def _new_id() -> str:
     return str(uuid.uuid4())
