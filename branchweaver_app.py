@@ -986,31 +986,32 @@ def tab_io(story: Story):
 
     with col2:
         st.markdown("#### Import JSON")
-        up = st.file_uploader("Upload BranchWeaver JSON", type=["json"])
-        # Reset the import flag if a new file is uploaded
-        if up is not None and st.session_state.get("just_imported", False):
-            st.session_state.just_imported = False
-        
-        if "just_imported" not in st.session_state:
-            st.session_state.just_imported = False
-        
-        if up is not None and not st.session_state.just_imported:
+        up = st.file_uploader("Upload BranchWeaver JSON", type=["json"], key="import_json")
+    
+        if up is not None and not st.session_state.has_imported:
             try:
-                data = up.getvalue().decode("utf-8")   # <-- critical fix
+                data = up.read().decode("utf-8")
                 st.session_state.story = story_from_json(data)
+    
+                # Reset UI selection / playback to new story
                 story = st.session_state.story
-        
-                # Reset selection and playback
                 first_id = next(iter(story.nodes.keys()), None)
                 st.session_state.ui["selected_node_id"] = first_id
                 st.session_state.ui["playback_node_id"] = first_id
                 st.session_state.ui["playback_history"] = [first_id] if first_id else []
-        
-                st.session_state.just_imported = True
+    
+                st.session_state.has_imported = True   # prevent repeat imports
+    
                 st.success("Imported story.")
-        
+                st.rerun()
+    
             except Exception as e:
                 st.error(f"Failed to import: {e}")
+    
+        # If user clears the file uploader (clicks X), allow importing again
+        if up is None and st.session_state.has_imported:
+            st.session_state.has_imported = False
+
 
 
 
