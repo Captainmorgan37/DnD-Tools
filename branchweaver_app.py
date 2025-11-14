@@ -622,19 +622,19 @@ def tab_visualizer(story: Story):
 
 # ------------- Tab: Playback -------------
 
-if not story.nodes:
-    st.info("No nodes in the story yet. Add some in the Branch Editor.")
-    return
 
-ids = list(story.nodes.keys())
-if not ids:
-    st.warning("No nodes available for playback.")
-    return
 
 
 def tab_playback(story: Story):
     st.subheader("🎬 Playback — Rehearse a Path")
-
+    if not story.nodes:
+        st.info("No nodes in the story yet. Add some in the Branch Editor.")
+        return
+    
+    ids = list(story.nodes.keys())
+    if not ids:
+        st.warning("No nodes available for playback.")
+        return
     # Pick a starting node
     ids = list(story.nodes.keys())
     labels = [f"{story.nodes[i].title} · {i[:8]}" for i in ids]
