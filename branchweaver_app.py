@@ -793,8 +793,11 @@ def tab_playback(story: Story):
         meta = " • ".join([x for x in [n.npc, n.location, n.emotion] if x])
         st.caption(meta)
     st.write(n.text)
-    if n.gm_notes and st.checkbox("Show GM notes", value=False):
-        st.info(n.gm_notes)
+    if n.gm_notes:
+        show_gm = st.checkbox("Show GM notes", key="pb_show_gm")
+        if show_gm:
+            st.info(n.gm_notes)
+
 
     st.markdown("---")
     if not n.choices:
