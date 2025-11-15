@@ -93,7 +93,11 @@ def ensure_state():
         st.session_state.ui = {
             "selected_node_id": None,
             "filter_text": "",
+            "editor_search": "",
             "tag_filter": [],
+            "filter_npc": "(Any)",
+            "filter_location": "(Any)",
+            "filter_show_broken": False,
             "show_gm": True,
             "color_by": "npc",  # npc | location | emotion | none
             "shape_by": "type",  # type | none (start vs normal)
@@ -699,27 +703,101 @@ def tab_editor(story: Story):
     # -------- LEFT: Node list & actions --------
     with left:
         st.subheader("🧩 Nodes")
-        q = st.session_state.ui["filter_text"].lower().strip()
-        node_items = list(story.nodes.items())
-        if q:
-            node_items = [
-                kv
-                for kv in node_items
-                if (q in kv[1].title.lower() or q in kv[1].text.lower())
-            ]
-        node_items.sort(key=lambda kv: kv[1].title.lower())
+        st.caption("Filter by text, tags, NPC, location, or show only nodes with broken links.")
+
+        search_val = st.text_input(
+            "Search (title, text, NPC, notes)",
+            value=st.session_state.ui.get("editor_search", ""),
+            placeholder="e.g., Toblen, haunting, 'Gate DC'",
+        )
+        st.session_state.ui["editor_search"] = search_val
+
+        available_tags = sorted({t for n in story.nodes.values() for t in n.tags})
+        preserved_tags = [
+            t for t in st.session_state.ui.get("tag_filter", []) if t in available_tags
+        ]
+        tag_filter = st.multiselect(
+            "Tags",
+            options=available_tags,
+            default=preserved_tags,
+            help="Show nodes that include all selected tags.",
+        )
+        st.session_state.ui["tag_filter"] = tag_filter
+
+        npc_options = ["(Any)"] + sorted({n.npc for n in story.nodes.values() if n.npc})
+        npc_sel = st.selectbox(
+            "NPC",
+            npc_options,
+            index=npc_options.index(st.session_state.ui.get("filter_npc", "(Any)"))
+            if st.session_state.ui.get("filter_npc", "(Any)") in npc_options
+            else 0,
+        )
+        st.session_state.ui["filter_npc"] = npc_sel
+
+        loc_options = ["(Any)"] + sorted(
+            {n.location for n in story.nodes.values() if n.location}
+        )
+        loc_sel = st.selectbox(
+            "Location",
+            loc_options,
+            index=loc_options.index(st.session_state.ui.get("filter_location", "(Any)"))
+            if st.session_state.ui.get("filter_location", "(Any)") in loc_options
+            else 0,
+        )
+        st.session_state.ui["filter_location"] = loc_sel
+
+        show_broken_only = st.checkbox(
+            "Only show nodes with unwired or missing-choice targets",
+            value=st.session_state.ui.get("filter_show_broken", False),
+        )
+        st.session_state.ui["filter_show_broken"] = show_broken_only
+
+        q = search_val.lower().strip()
+        tag_filter_set = set(tag_filter)
+
+        filtered_items = []
+        for nid, node in story.nodes.items():
+            matches = True
+            if q and not (
+                q in node.title.lower()
+                or q in (node.text or "").lower()
+                or q in (node.npc or "").lower()
+                or q in (node.gm_notes or "").lower()
+            ):
+                matches = False
+            if matches and tag_filter_set and not tag_filter_set.issubset(set(node.tags)):
+                matches = False
+            if matches and npc_sel != "(Any)" and node.npc != npc_sel:
+                matches = False
+            if matches and loc_sel != "(Any)" and node.location != loc_sel:
+                matches = False
+
+            broken = any(
+                (not ch.target_id) or (ch.target_id not in story.nodes)
+                for ch in node.choices
+            )
+            if matches and show_broken_only and not broken:
+                matches = False
+
+            if matches:
+                filtered_items.append((nid, node, broken))
+
+        filtered_items.sort(key=lambda kv: kv[1].title.lower())
 
         selected_id = st.session_state.ui.get("selected_node_id")
 
-        if not node_items:
+        if not filtered_items:
             st.info("No nodes yet. Create one to get started.")
             if st.button("➕ New First Node", use_container_width=True):
                 nid = add_node(story, title="New Node", text="")
                 st.session_state.ui["selected_node_id"] = nid
                 st.rerun()
         else:
-            options = [f"{v.title}  ·  {k[:8]}" for k, v in node_items]
-            ids = [k for k, _ in node_items]
+            options = [
+                f"{'⚠️ ' if broken else ''}{v.title}  ·  {k[:8]}"
+                for k, v, broken in filtered_items
+            ]
+            ids = [k for k, _, _ in filtered_items]
 
             if selected_id not in ids:
                 selected_id = ids[0]
@@ -729,6 +807,25 @@ def tab_editor(story: Story):
             sel = st.selectbox("Select a node", options, index=idx)
             selected_id = ids[options.index(sel)]
             st.session_state.ui["selected_node_id"] = selected_id
+
+            sel_node = story.nodes.get(selected_id)
+            if sel_node:
+                meta_bits = [
+                    part
+                    for part in [sel_node.npc or None, sel_node.location or None, sel_node.emotion or None]
+                    if part
+                ]
+                meta_line = " • ".join(meta_bits) if meta_bits else "No metadata set."
+                st.caption(meta_line)
+
+                broken = any(
+                    (not ch.target_id) or (ch.target_id not in story.nodes)
+                    for ch in sel_node.choices
+                )
+                if broken:
+                    st.warning(
+                        "This node has choices that are not wired to a valid target yet."
+                    )
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -761,26 +858,68 @@ def tab_editor(story: Story):
         node = story.nodes[selected_id]
 
         # --- FORM: node fields only ---
+        title_key = f"title_input_{selected_id}"
+        text_key = f"text_input_{selected_id}"
+        gm_key = f"gm_input_{selected_id}"
+        npc_key = f"npc_input_{selected_id}"
+        loc_key = f"loc_input_{selected_id}"
+        emo_key = f"emo_input_{selected_id}"
+        tag_key = f"tag_input_{selected_id}"
+
         with st.form(key=f"edit_{selected_id}_form"):
             cA, cB = st.columns([2, 1])
             with cA:
-                node.title = st.text_input("Title / Speaker", value=node.title)
-                node.text = st.text_area(
-                    "Scene / Dialogue Text", value=node.text, height=160
+                title_val = st.text_input(
+                    "Title / Speaker",
+                    value=node.title,
+                    key=title_key,
                 )
-                node.gm_notes = st.text_area(
-                    "GM Notes (hidden)", value=node.gm_notes, height=80
+                text_val = st.text_area(
+                    "Scene / Dialogue Text",
+                    value=node.text,
+                    height=160,
+                    key=text_key,
+                )
+                gm_val = st.text_area(
+                    "GM Notes (hidden)",
+                    value=node.gm_notes,
+                    height=80,
+                    key=gm_key,
                 )
             with cB:
-                node.npc = st.text_input("NPC", value=node.npc)
-                node.location = st.text_input("Location", value=node.location)
-                node.emotion = st.text_input("Emotion", value=node.emotion)
-                tag_str = st.text_input(
-                    "Tags (comma-separated)", value=", ".join(node.tags)
+                npc_val = st.text_input("NPC", value=node.npc, key=npc_key)
+                loc_val = st.text_input(
+                    "Location", value=node.location, key=loc_key
                 )
-                node.tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+                emo_val = st.text_input("Emotion", value=node.emotion, key=emo_key)
+                tag_str = st.text_input(
+                    "Tags (comma-separated)",
+                    value=", ".join(node.tags),
+                    key=tag_key,
+                )
 
-            st.form_submit_button("💾 Save Node Details")
+            save_clicked = st.form_submit_button("💾 Save Node Details")
+            reset_clicked = st.form_submit_button("↩️ Reset form", type="secondary")
+
+        if reset_clicked:
+            st.session_state[title_key] = node.title
+            st.session_state[text_key] = node.text
+            st.session_state[gm_key] = node.gm_notes
+            st.session_state[npc_key] = node.npc
+            st.session_state[loc_key] = node.location
+            st.session_state[emo_key] = node.emotion
+            st.session_state[tag_key] = ", ".join(node.tags)
+            st.rerun()
+
+        if save_clicked:
+            node.title = title_val.strip() or "(untitled)"
+            node.text = text_val.strip()
+            node.gm_notes = gm_val.strip()
+            node.npc = npc_val.strip()
+            node.location = loc_val.strip()
+            node.emotion = emo_val.strip()
+            node.tags = [t.strip() for t in tag_str.split(",") if t.strip()]
+            st.success("Node details saved.")
 
         st.markdown("---")
         st.markdown("#### Choices / Branches")
@@ -790,6 +929,9 @@ def tab_editor(story: Story):
         node_labels = [
             f"{story.nodes[nid].title} · {nid[:8]}" for nid in node_ids
         ]
+        target_choices = [
+            ("", "🚧 Unlinked — decide later")
+        ] + list(zip(node_ids, node_labels))
 
         # --- Existing choices ---
         for i, ch in enumerate(list(node.choices)):
@@ -812,18 +954,32 @@ def tab_editor(story: Story):
                     if t.strip()
                 ]
 
-                # Target selector
-                try:
-                    target_idx = node_ids.index(ch.target_id)
-                except ValueError:
-                    target_idx = 0
+                # Target selector with placeholder
+                target_idx = 0
+                for idx, (nid, _) in enumerate(target_choices):
+                    if nid == ch.target_id:
+                        target_idx = idx
+                        break
                 sel_target = st.selectbox(
                     "Leads to node",
-                    node_labels,
+                    target_choices,
                     index=target_idx,
+                    format_func=lambda item: item[1],
                     key=f"sel_{selected_id}_{i}",
                 )
-                ch.target_id = node_ids[node_labels.index(sel_target)]
+                ch.target_id = sel_target[0]
+
+                if not ch.target_id:
+                    st.info("This choice is saved but not wired to a target yet.")
+                elif ch.target_id not in story.nodes:
+                    st.error(
+                        "Target node is missing. Choose a new destination or delete this choice."
+                    )
+                else:
+                    target_node = story.nodes[ch.target_id]
+                    st.caption(
+                        f"Goes to **{target_node.title}** ({target_node.id[:8]})."
+                    )
 
                 col_rm, col_up, col_dn = st.columns(3)
                 if col_rm.button("Remove", key=f"rm_{selected_id}_{i}"):
@@ -849,19 +1005,23 @@ def tab_editor(story: Story):
         st.markdown("**Add Choice**")
         new_c_text = st.text_input("New choice text", key=f"newct_{selected_id}")
         if node_ids:
-            default_idx = node_ids.index(selected_id)
+            default_idx = next(
+                (idx for idx, (nid, _) in enumerate(target_choices) if nid == selected_id),
+                0,
+            )
         else:
             default_idx = 0
         tar_sel = st.selectbox(
             "Target node",
-            node_labels if node_labels else ["(no nodes)"],
-            index=default_idx if node_labels else 0,
+            target_choices if target_choices else [("", "(no nodes)")],
+            index=min(default_idx, len(target_choices) - 1) if target_choices else 0,
+            format_func=lambda item: item[1],
             key=f"newtar_{selected_id}",
         )
         req = st.text_input("Gate (opt.)", key=f"newgate_{selected_id}")
 
         if st.button("➕ Add Choice", key=f"addchoice_{selected_id}") and new_c_text:
-            target_id = node_ids[node_labels.index(tar_sel)]
+            target_id = tar_sel[0]
             node.choices.append(
                 Choice(text=new_c_text, target_id=target_id, gate=req)
             )
@@ -877,6 +1037,8 @@ def tab_visualizer(story: Story):
     show_gm = st.session_state.ui["show_gm"]
     color_by = st.session_state.ui["color_by"]
     shape_by = st.session_state.ui["shape_by"]
+
+    legend_entries = {}
 
     # Build DOT graph (no call to dot.pipe / no system graphviz needed)
     dot = graphviz.Digraph("branchweaver")
@@ -897,6 +1059,11 @@ def tab_visualizer(story: Story):
             color_val = n.emotion
         fill = color_for_value(color_val) if color_by != "none" else "#ffffff"
         style = "filled" if color_by != "none" else "solid"
+
+        if color_by != "none":
+            legend_label = color_val or "(Unspecified)"
+            if legend_label not in legend_entries:
+                legend_entries[legend_label] = fill
 
         # shape
         shape = "oval"
@@ -981,6 +1148,23 @@ def tab_visualizer(story: Story):
 
     # --- Inline panel view ---
     st.markdown("#### Inline View")
+    if color_by != "none" and legend_entries:
+        st.markdown("**Color legend**")
+        legend_cols = st.columns(min(4, len(legend_entries)))
+        for idx, (label, color) in enumerate(sorted(legend_entries.items())):
+            col = legend_cols[idx % len(legend_cols)]
+            col.markdown(
+                f"<div style='display:flex;align-items:center;gap:0.5rem;'>"
+                f"<span style='width:16px;height:16px;border-radius:4px;display:inline-block;background:{color};border:1px solid #999;'></span>"
+                f"<span style='font-size:0.85rem'>{label}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "Colors follow the 'Color by' selection above. Nodes with no value use a muted gray."
+        )
+    if shape_by == "type":
+        st.caption("Shape legend: double circle = start node, box = standard node.")
     inline_html = make_viz_html("branchweaver_inline", "70vh")
     st.components.v1.html(inline_html, height=650, scrolling=False)
 
@@ -1210,12 +1394,23 @@ def tab_playback(story: Story):
                 st.session_state.ui["playback_history"] = hist
                 st.rerun()
 
-    hist_titles = [
-        story.nodes[x].title
-        for x in st.session_state.ui.get("playback_history", [])
-        if x in story.nodes
+    playback_hist = [
+        (nid, story.nodes[nid].title)
+        for nid in st.session_state.ui.get("playback_history", [])
+        if nid in story.nodes
     ]
-    st.caption("History: " + " → ".join(hist_titles))
+    if playback_hist:
+        st.markdown("#### Path so far")
+        cols = st.columns(min(5, len(playback_hist)))
+        for idx, (nid, title) in enumerate(playback_hist):
+            col = cols[idx % len(cols)]
+            if col.button(title, key=f"pb_hist_{idx}"):
+                st.session_state.ui["playback_node_id"] = nid
+                st.session_state.ui["playback_history"] = [
+                    hid for hid, _ in playback_hist[: idx + 1]
+                ]
+                st.rerun()
+        st.caption("Click any previous beat to jump back and branch from there.")
 
 
 
