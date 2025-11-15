@@ -1615,24 +1615,33 @@ def tab_ai(story: Story):
                         )
                         raw = resp.choices[0].message.content.strip()
                         st.session_state["ai_last_raw_json"] = raw
-                        st.success("AI branch generated. Review the JSON below, then apply it to the story.")
-
-                        st.code(raw, language="json")
-
-                        if st.button("✅ Apply these nodes to the story", key="ai_new_branch_apply"):
-                            parent_id = sel_node.id if (attach_to_existing and sel_node) else None
-                            new_ids = apply_ai_nodes_to_story(
-                                story,
-                                raw,
-                                attach_parent_id=parent_id,
-                                attach_choice_text=attach_choice_text if parent_id else None,
-                            )
-                            # Move selection to the first new node
-                            if new_ids:
-                                st.session_state.ui["selected_node_id"] = new_ids[0]
-                            st.success(f"Added {len(new_ids)} new nodes to the story.")
+                        st.success(
+                            "AI branch generated. Review the JSON in the section below, then apply it to the story."
+                        )
                     except Exception as e:
                         st.error(f"OpenAI call failed: {e}")
+
+        # Allow applying the most recent AI branch even after a rerun
+        if st.session_state.get("ai_last_raw_json"):
+            st.markdown("### 2) Review & apply the last generated branch")
+            st.code(st.session_state["ai_last_raw_json"], language="json")
+
+            if st.button("✅ Apply these nodes to the story", key="ai_new_branch_apply"):
+                try:
+                    parent_id = sel_node.id if (attach_to_existing and sel_node) else None
+                    new_ids = apply_ai_nodes_to_story(
+                        story,
+                        st.session_state["ai_last_raw_json"],
+                        attach_parent_id=parent_id,
+                        attach_choice_text=attach_choice_text if parent_id else None,
+                    )
+                    # Move selection to the first new node
+                    if new_ids:
+                        st.session_state.ui["selected_node_id"] = new_ids[0]
+                    st.success(f"Added {len(new_ids)} new nodes to the story.")
+                    st.session_state.pop("ai_last_raw_json", None)
+                except Exception as e:
+                    st.error(f"Failed to apply branch JSON: {e}")
 
     elif mode == "Expand the selected node":
         st.markdown("### 1) Expand the current node")
@@ -1701,34 +1710,37 @@ def tab_ai(story: Story):
                         raw = resp.choices[0].message.content.strip()
                         st.session_state["ai_last_expand_json"] = raw
                         st.success("AI proposed an expanded version of this node. Review below.")
-
-                        st.code(raw, language="json")
-
-                        if st.button("✅ Apply expansion to this node", key="ai_expand_apply"):
-                            try:
-                                nd = json.loads(raw)
-                                sel_node.title = nd.get("title", sel_node.title)
-                                sel_node.text = nd.get("text", sel_node.text)
-                                sel_node.npc = nd.get("npc", sel_node.npc)
-                                sel_node.location = nd.get("location", sel_node.location)
-                                sel_node.emotion = nd.get("emotion", sel_node.emotion)
-                                sel_node.tags = nd.get("tags", sel_node.tags)
-                                sel_node.gm_notes = nd.get("gm_notes", sel_node.gm_notes)
-                                sel_node.choices = []
-                                for ch_def in nd.get("choices", []) or []:
-                                    sel_node.choices.append(
-                                        Choice(
-                                            text=ch_def.get("text", ""),
-                                            target_id="",  # DM can wire later in editor
-                                            tags=ch_def.get("tags", []) or [],
-                                            gate=ch_def.get("gate", ""),
-                                        )
-                                    )
-                                st.success("Node updated with AI expansion.")
-                            except Exception as e:
-                                st.error(f"Failed to apply expansion JSON: {e}")
                     except Exception as e:
                         st.error(f"OpenAI call failed: {e}")
+
+        if st.session_state.get("ai_last_expand_json"):
+            st.markdown("### 2) Review & apply the last expansion proposal")
+            st.code(st.session_state["ai_last_expand_json"], language="json")
+
+            if st.button("✅ Apply expansion to this node", key="ai_expand_apply"):
+                try:
+                    nd = json.loads(st.session_state["ai_last_expand_json"])
+                    sel_node.title = nd.get("title", sel_node.title)
+                    sel_node.text = nd.get("text", sel_node.text)
+                    sel_node.npc = nd.get("npc", sel_node.npc)
+                    sel_node.location = nd.get("location", sel_node.location)
+                    sel_node.emotion = nd.get("emotion", sel_node.emotion)
+                    sel_node.tags = nd.get("tags", sel_node.tags)
+                    sel_node.gm_notes = nd.get("gm_notes", sel_node.gm_notes)
+                    sel_node.choices = []
+                    for ch_def in nd.get("choices", []) or []:
+                        sel_node.choices.append(
+                            Choice(
+                                text=ch_def.get("text", ""),
+                                target_id="",  # DM can wire later in editor
+                                tags=ch_def.get("tags", []) or [],
+                                gate=ch_def.get("gate", ""),
+                            )
+                        )
+                    st.success("Node updated with AI expansion.")
+                    st.session_state.pop("ai_last_expand_json", None)
+                except Exception as e:
+                    st.error(f"Failed to apply expansion JSON: {e}")
 
     elif mode == "Rewrite the selected node":
         st.markdown("### 1) Rewrite the current node for tone or clarity")
@@ -1778,20 +1790,23 @@ def tab_ai(story: Story):
                     raw = resp.choices[0].message.content.strip()
                     st.session_state["ai_last_rewrite_json"] = raw
                     st.success("AI suggested a rewrite. Review below.")
-
-                    st.code(raw, language="json")
-
-                    if st.button("✅ Apply rewrite", key="ai_rewrite_apply"):
-                        try:
-                            nd = json.loads(raw)
-                            sel_node.text = nd.get("text", sel_node.text)
-                            if "gm_notes" in nd:
-                                sel_node.gm_notes = nd.get("gm_notes", sel_node.gm_notes)
-                            st.success("Node text updated.")
-                        except Exception as e:
-                            st.error(f"Failed to apply rewrite JSON: {e}")
                 except Exception as e:
                     st.error(f"OpenAI call failed: {e}")
+
+        if st.session_state.get("ai_last_rewrite_json"):
+            st.markdown("### 2) Review & apply the last rewrite")
+            st.code(st.session_state["ai_last_rewrite_json"], language="json")
+
+            if st.button("✅ Apply rewrite", key="ai_rewrite_apply"):
+                try:
+                    nd = json.loads(st.session_state["ai_last_rewrite_json"])
+                    sel_node.text = nd.get("text", sel_node.text)
+                    if "gm_notes" in nd:
+                        sel_node.gm_notes = nd.get("gm_notes", sel_node.gm_notes)
+                    st.success("Node text updated.")
+                    st.session_state.pop("ai_last_rewrite_json", None)
+                except Exception as e:
+                    st.error(f"Failed to apply rewrite JSON: {e}")
 
 
 
