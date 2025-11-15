@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field, asdict, is_dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import streamlit as st
 import graphviz
@@ -66,6 +66,52 @@ class Story:
     start_node_id: Optional[str] = None
 
 
+@dataclass
+class StoryState:
+    current_node_id: Optional[str]
+    history: List[str] = field(default_factory=list)
+    visited: Set[str] = field(default_factory=set)
+    flags: Dict[str, Any] = field(default_factory=dict)
+    inventory: List[str] = field(default_factory=list)
+    notes: str = ""
+
+    def to_context(self, story: Optional[Story] = None) -> Dict[str, Any]:
+        data = {
+            "current_node_id": self.current_node_id,
+            "history": list(self.history),
+            "visited": list(self.visited),
+            "flags": self.flags,
+            "inventory": list(self.inventory),
+            "notes": self.notes,
+        }
+        if story:
+            current = story.nodes.get(self.current_node_id) if self.current_node_id else None
+            data["current_node_title"] = current.title if current else None
+            data["history_titles"] = [
+                story.nodes[nid].title
+                for nid in self.history
+                if nid in story.nodes
+            ]
+            data["visited_titles"] = [
+                story.nodes[nid].title
+                for nid in self.visited
+                if nid in story.nodes
+            ]
+        return data
+
+    def export_payload(self, story: Story) -> Dict[str, Any]:
+        ordered_ids = [nid for nid in self.history if nid in story.nodes]
+        return {
+            "story_title": story.title,
+            "path_node_ids": ordered_ids,
+            "path_node_titles": [story.nodes[nid].title for nid in ordered_ids],
+            "flags": self.flags,
+            "inventory": list(self.inventory),
+            "notes": self.notes,
+            "visited_ids": [nid for nid in self.visited if nid in story.nodes],
+        }
+
+
 # -------------------------------
 # Helpers & State
 # -------------------------------
@@ -109,6 +155,50 @@ def ensure_state():
     # 🔥 Add this NEW block:
     if "has_imported" not in st.session_state:
         st.session_state.has_imported = False
+
+
+def _initial_play_state(story: Story) -> StoryState:
+    start_id = story.start_node_id or next(iter(story.nodes.keys()), None)
+    state = StoryState(current_node_id=start_id)
+    if start_id:
+        state.history = [start_id]
+        state.visited = {start_id}
+    return state
+
+
+def ensure_play_state(story: Story) -> StoryState:
+    state = st.session_state.get("play_state")
+    if not isinstance(state, StoryState):
+        state = _initial_play_state(story)
+    if story.nodes:
+        if not state.current_node_id or state.current_node_id not in story.nodes:
+            state = _initial_play_state(story)
+    else:
+        state.current_node_id = None
+        state.history = []
+        state.visited = set()
+
+    st.session_state.play_state = state
+    return state
+
+
+def evaluate_gate(gate: str, flags: Dict[str, Any]) -> bool:
+    if not gate:
+        return True
+    safe_flags = {k: v for k, v in flags.items() if isinstance(k, str)}
+    try:
+        return bool(eval(gate, {"__builtins__": {}}, safe_flags))
+    except Exception:
+        return False
+
+
+def canonical_play_context(story: Story) -> Optional[Dict[str, Any]]:
+    state = st.session_state.get("play_state")
+    if not isinstance(state, StoryState):
+        return None
+    if not state.current_node_id:
+        return None
+    return state.to_context(story)
 
 def try_autoload() -> bool:
     """Try to restore story from autosave on disk."""
@@ -412,6 +502,12 @@ def build_story_context(story: Story, max_nodes: int = 40) -> str:
             f"npc='{n.npc}', location='{n.location}', emotion='{n.emotion}', "
             f"tags={n.tags}, gm_notes='{(n.gm_notes or '')[:80]}', text_snippet='{snippet}'"
         )
+
+    play_ctx = canonical_play_context(story)
+    if play_ctx:
+        lines.append("")
+        lines.append("=== Canonical play state ===")
+        lines.append(json.dumps({"story_title": story.title, **play_ctx}, indent=2))
 
     return "\n".join(lines)
 
@@ -1186,6 +1282,144 @@ def tab_visualizer(story: Story):
 
 
 
+# ------------- Tab: Play Mode -------------
+def tab_play_mode(story: Story):
+    st.subheader("▶️ Play Mode — Track Canon State")
+
+    if not story.nodes:
+        st.info("No nodes in the story yet. Add some in the Branch Editor.")
+        return
+
+    state = ensure_play_state(story)
+    if st.button("🔁 Reset session state"):
+        st.session_state.play_state = _initial_play_state(story)
+        st.rerun()
+
+    current_node = story.nodes.get(state.current_node_id) if state.current_node_id else None
+    if not current_node:
+        st.warning("No valid starting node. Set a start node in the Branch Editor.")
+        return
+
+    left, right = st.columns([2, 1])
+
+    with left:
+        st.markdown(f"### {current_node.title}")
+        if any([current_node.npc, current_node.location, current_node.emotion]):
+            meta = " • ".join(
+                [x for x in [current_node.npc, current_node.location, current_node.emotion] if x]
+            )
+            if meta:
+                st.caption(meta)
+        if current_node.tags:
+            st.caption("Tags: " + ", ".join(current_node.tags))
+        st.write(current_node.text)
+        if current_node.gm_notes:
+            with st.expander("GM notes"):
+                st.info(current_node.gm_notes)
+
+        st.markdown("---")
+        st.markdown("#### Choices")
+        if not current_node.choices:
+            st.success("No further choices. Reset to explore other branches.")
+        else:
+            for idx, choice in enumerate(current_node.choices):
+                gate_ok = evaluate_gate(choice.gate, state.flags)
+                label = choice.text
+                if choice.gate:
+                    label += f"  [{choice.gate}]"
+                disabled = not gate_ok or choice.target_id not in story.nodes
+                if st.button(
+                    label,
+                    key=f"play_choice_{current_node.id}_{idx}",
+                    disabled=disabled,
+                ):
+                    state.history.append(choice.target_id)
+                    state.visited.add(choice.target_id)
+                    state.current_node_id = choice.target_id
+                    st.session_state.play_state = state
+                    st.rerun()
+                if not gate_ok:
+                    st.caption("⚠️ Locked: gate is not satisfied by the current flags.")
+                elif choice.target_id not in story.nodes:
+                    st.caption("⚠️ Target node missing — wire this choice in the Branch Editor.")
+
+    with right:
+        st.markdown("#### Flags")
+        if state.flags:
+            for key in sorted(state.flags.keys()):
+                val = state.flags[key]
+                col_a, col_b = st.columns([3, 1])
+                col_a.write(f"**{key}** = `{val}`")
+                if col_b.button("✖", key=f"flag_remove_{key}"):
+                    state.flags.pop(key)
+                    st.session_state.play_state = state
+                    st.rerun()
+        else:
+            st.caption("No flags yet.")
+        flag_key = st.text_input("Flag name", key="play_flag_key")
+        flag_val = st.text_input("Flag value", key="play_flag_val")
+        if st.button("Add / update flag"):
+            if flag_key.strip():
+                try:
+                    parsed = json.loads(flag_val)
+                except Exception:
+                    parsed = flag_val
+                state.flags[flag_key.strip()] = parsed
+                st.session_state.play_state = state
+                st.rerun()
+            else:
+                st.warning("Enter a flag name first.")
+
+        st.markdown("#### Inventory")
+        if state.inventory:
+            for idx, item in enumerate(state.inventory):
+                col_a, col_b = st.columns([3, 1])
+                col_a.write(f"• {item}")
+                if col_b.button("✖", key=f"inv_remove_{idx}"):
+                    state.inventory.pop(idx)
+                    st.session_state.play_state = state
+                    st.rerun()
+        else:
+            st.caption("Inventory empty.")
+        inv_item = st.text_input("Add item", key="play_inventory_add")
+        if st.button("➕ Add item"):
+            if inv_item.strip():
+                state.inventory.append(inv_item.strip())
+                st.session_state.play_state = state
+                st.rerun()
+            else:
+                st.warning("Enter an item description first.")
+
+        st.markdown("#### Notes")
+        notes_val = st.text_area("DM notes", value=state.notes)
+        if notes_val != state.notes:
+            state.notes = notes_val
+            st.session_state.play_state = state
+
+        st.markdown("#### Path taken")
+        if state.history:
+            for idx, nid in enumerate(state.history, start=1):
+                title = story.nodes[nid].title if nid in story.nodes else "(missing node)"
+                st.write(f"{idx}. {title} ({nid[:8]})")
+        else:
+            st.caption("No path yet.")
+
+        st.markdown("#### Export playthrough")
+        export_payload = state.export_payload(story)
+        export_json = json.dumps(export_payload, indent=2)
+        st.download_button(
+            "⬇️ Download canonical run",
+            data=export_json,
+            file_name="branchweaver_playthrough.json",
+        )
+
+        ctx = canonical_play_context(story)
+        if ctx:
+            ctx_json = json.dumps({"story_title": story.title, **ctx}, indent=2)
+            st.caption("Canonical context to feed into AI prompts:")
+            st.code(ctx_json, language="json")
+
+
 # ------------- Tab: Playback -------------
 def tab_playback(story: Story):
     st.subheader("🎬 Playback — Rehearse a Path")
@@ -1956,6 +2190,7 @@ def main():
         "📘 Overview",
         "🧩 Branch Editor",
         "🕸️ Visualizer",
+        "▶️ Play Mode",
         "🎬 Playback",
         "🧪 Generators",
         "🧠 AI Assistant",
@@ -1972,16 +2207,18 @@ def main():
     with tabs[2]:
         tab_visualizer(story)
     with tabs[3]:
-        tab_playback(story)
+        tab_play_mode(story)
     with tabs[4]:
-        tab_generators(story)
+        tab_playback(story)
     with tabs[5]:
-        tab_ai(story)          # 👈 NEW
+        tab_generators(story)
     with tabs[6]:
-        tab_world_state(story)
+        tab_ai(story)          # 👈 NEW
     with tabs[7]:
-        tab_io(story)
+        tab_world_state(story)
     with tabs[8]:
+        tab_io(story)
+    with tabs[9]:
         tab_settings(story)
 
 
